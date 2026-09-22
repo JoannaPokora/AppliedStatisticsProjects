@@ -1,0 +1,640 @@
+---
+title: "Multiple testing"
+author: "Joanna Pokora"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE)
+
+library(dplyr)
+library(ggplot2)
+library(sde)
+library(tidyr)
+library(kableExtra)
+library(latex2exp)
+library(paletteer)
+
+set.seed(111)
+```
+
+## 1. Introduction
+
+This report compares the family-wise error rates, false discovery rates and powers of different multiple testing procedures under a variety of setups. Moreover, it employs two-step Fisher procedure with Bonferroni and chi-square tests, as well as shows the association between the Brownian Bridge and asymptotic distribution of Kolmogorov-Smirnov test statistic.
+
+## 2. Comparison of procedures in a low dimensional setup
+
+```{r}
+n <- 20
+mu <- list(c(1.2*sqrt(2*log(n)), rep(0, n-1)),
+           c(rep(1.02*sqrt(2*log(n/10)), 5), rep(0, n-5)),
+           c(sqrt(2*log(20/(1:10))), rep(0, n-10)))
+rep <- 10000
+alpha <- 0.05
+methods_names <- c("Bonferroni", "Sidak", "Holm", "Hochberg",
+                   "Benjamini-Hochberg")
+
+mult_samp_1 <- setNames(lapply(mu, function(mu_vec){
+  lapply(1:rep, function(rep){
+    sapply(mu_vec, function(mu_val) rnorm(1, mu_val))
+  })
+}), paste0("Signals_num=", c(1,5,10)))
+
+mult_p_vals_1 <- lapply(mult_samp_1, function(samp_mu){
+  lapply(samp_mu, function(samp) 2*pnorm(-abs(samp)))
+})
+
+res_1 <- lapply(mult_p_vals_1, function(p_vals_mu){
+  lapply(p_vals_mu, function(p_vals){
+    setNames(list(p.adjust(p_vals, method = "bonferroni") < alpha,
+      p_vals < (1 - (1 - alpha)^(1/n)),
+      p.adjust(p_vals, method = "holm") < alpha,
+      p.adjust(p_vals, method = "hochberg") < alpha,
+      p.adjust(p_vals, method = "BH") < alpha),
+      methods_names)
+  })
+})
+
+pow_1 <- setNames(mapply(function(signals_num, res_mu){
+  lapply(res_mu, function(res_method){
+    lapply(res_method, function(res){
+      if(signals_num == 1) res[1]
+      else mean(res[1:signals_num])
+    })
+  })
+}, c(1, 5, 10), res_1, SIMPLIFY = FALSE),
+names(res_1))
+
+# c) dodatkowe
+res_1_size <- lapply(res_1[[3]], function(res_rep){
+    lapply(res_rep, function(res) res[1:10])
+  })
+
+rej_info_1 <- setNames(mapply(function(signals_num, res_mu){
+  lapply(res_mu, function(res_method){
+    lapply(res_method, function(res){
+      list(V = sum(res[-(1:signals_num)]),
+           R = sum(res))
+    })
+  })
+}, c(1, 5, 10), res_1, SIMPLIFY = FALSE),
+names(res_1))
+
+rej_info_df_1 <- data.frame(
+  V = unlist(rej_info_1)[seq(1, length(unlist(rej_info_1)), by = 2)],
+  R = unlist(rej_info_1)[seq(2, length(unlist(rej_info_1)), by = 2)],
+  Method = methods_names,
+  `Signals number` = rep(c(1, 5, 10), each = 5*rep),
+  check.names = FALSE
+  ) %>%
+  group_by(Method, `Signals number`) %>%
+  summarise(FWER = mean(V >= 1),
+            FDR = mean(ifelse(R > 0, V/R, 0)))
+```
+For $n=20$ we consider cases
+
+a) $\mu_1=1.2\sqrt{2\log n}$, $\mu_2=...=\mu_n=0$,
+b) $\mu_1=...=\mu_5=1.02\sqrt{2\log\left(\frac{n}{10}\right)}$, $\mu_6=...=\mu_n=0$,
+c) $\mu_i=\sqrt{2\log\left(\frac{20}{i}\right)}$, $i=1,...,10$, $\mu_11=...=\mu_n=0$.
+
+For each of these scenarios, we simulate 10000 samples with $n=20$ observations, drawn from the $N(\mu_i,1)$ distribution, $i=1,...,n$. For every $i$, we formulate the following testing problem
+
+$$H_0:\mu_i=0,\;\:H_1:\mu_i\ne0.$$
+
+To make the decisions at the significance level $\alpha=0.05$, we use the following multiple testing procedures:
+
+* Bonferroni's - rejects $H_{0i}$ if and only if
+
+$$p_i\leq\frac{\alpha}{n};$$
+
+* Sidak's with $\alpha_n=1-(1-\alpha)^{1/n}$ - rejects $H_{0i}$ if and only if
+
+$$p_i\leq\alpha_n;$$
+
+* Holm's - for ordered $p$-values $p_{(1)}\leq p_{(2)}\leq...\leq p_{(n)}$ and corresponding hypotheses $H_{(1)}, H_{(2)},...,H_{(n)}$, this procedure rejects $H_{(1)},...,H_{(i_0-1)}$, where
+
+$$i_0=\min\left\{i:p_{(i)}>\frac{\alpha}{n-i+1}\right\};$$
+
+* Hochberg's - for ordered $p$-values rejects $H_{(1)},...,H_{(i_0)}$, where
+
+$$i_0=\max\left\{i:p_{(i)}\leq\frac{\alpha}{n-i+1}\right\};$$
+
+* Benjaminii-Hochberg's - for ordered $p$-values rejects $H_{(1)},...,H_{(i_0)}$, where
+
+$$i_0=\max\left\{i:p_{(i)}\leq\frac{i}{n}\alpha\right\}.$$
+
+To apply the following procedures, first we compute $p$-values. To do this, in each case we are using two-tailed $Z$-test with known variance $\sigma^2=1$ for testing hypotheses
+
+$$H_0:\mu_i=0,\;\;H_1:\mu_i\ne0.$$
+
+Based on the obtained results we compare the powers of procedures. To achieve this, we estimate the powers of procedures in each repetition and then compute the average. Results can be seen in a table below.
+
+```{r}
+pow_1_df <- data.frame(Power = unlist(pow_1),
+           Method = methods_names,
+           `Signals number` = rep(c(1, 5, 10), each = 5*rep),
+           check.names = FALSE) %>%
+  group_by(Method, `Signals number`) %>%
+  summarise(Power = mean(Power)) %>%
+  pivot_wider(names_from = Method, values_from = Power) %>%
+  mutate(`Signals number` = case_when(`Signals number` == 1 ~ "a)",
+                          `Signals number` == 5 ~ "b)",
+                          `Signals number` == 10 ~ "c)")) %>%
+  rename("Case" = `Signals number`) 
+
+kable(pow_1_df, digits = 3) %>%
+  kable_styling(latex_options = "HOLD_position")
+```
+
+All powers are highest when there is only one signal $\mu_1\approx2.937$. On the other hand, they are lowest when there are 5 signals, $\mu_1=...=\mu_5\approx1.201$. Moreover, the powers of all procedures are very similar, except for the power of Benjamini-Hochberg procedure, which is slightly higher in each scenario, particularly when there are 10 signals. Overall, all estimated powers are quite low.
+
+In case c), the strengths of signals are vary depending on $i$. In this instance, we can estimate multiple "powers" for each procedure, depending on the signal strength. To do this, we calculate the average number of discoveries for each $i=1,...,10$ across all repetitions for each procedure. The results can be seen below.
+
+```{r}
+data.frame(Results = unlist(res_1_size),
+           mu = mu[[3]][1:10],
+           Method = rep(methods_names,
+                        each = 10)) %>%
+  group_by(mu, Method) %>%
+  summarise(Power = mean(Results)) %>%
+  ggplot(aes(x = mu, y = Power, color = Method, group = Method)) +
+  geom_point() +
+  geom_line() +
+  labs(x = TeX("$\\mu$")) +
+  theme_light() +
+  scale_colour_paletteer_d("fishualize::Balistapus_undulatus")
+```
+
+New powers increase with signal strength, which is expected. The powers obtained for Benjamini-Hochberg procedure are noticeably higher than those of the other methods, which are similar. As previously, all powers are low.
+
+Next we calculate the number of true discoveries and total discoveries for each procedure and repetition. We then estimate the FWER as the proportion of repetitions where the value of V is greater than 1. Below, the obtained results can be seen.
+
+```{r}
+rej_info_df_1 %>%
+  dplyr::select(!FDR) %>%
+  pivot_wider(names_from = Method, values_from = FWER) %>%
+  mutate(`Signals number` = case_when(`Signals number` == 1 ~ "a)",
+                          `Signals number` == 5 ~ "b)",
+                          `Signals number` == 10 ~ "c)")) %>%
+  rename("Case" = `Signals number`) %>%
+  kbl(digits = 3) %>%
+  kable_styling(latex_options = "HOLD_position")
+```
+
+Except for Benjamini-Hochberg procedure, all methods control FWER at the level $\alpha=0.05$. Although they are similar, the results for Bonferroni procedure are slightly smaller in each scenario, which is an expected outcome since it is conservative and controls FWER with a margin of safety. Moreover, Hochberg and Holm procedures gives exactly the same results.
+
+Benjamini-Hochberg procedure generally does not control the FWER (unless all null hypotheses are true). In our case, its value is slightly below 0.05 only when there are 5 relatively small signals. Moreover, when there are 10 signals, the FWER for all other procedures is the lowest, which is not the case for the Benjamini-Hochberg, as its FWER is then very similar to that observed in case a).
+
+Next, we estimate FDR as the ratio $V/R$ if $R>0$ or 0 if $R=0$. Below, the obtained values are shown.
+
+```{r}
+rej_info_df_1 %>%
+  dplyr::select(!FWER) %>%
+  pivot_wider(names_from = Method, values_from = FDR) %>%
+  mutate(`Signals number` = case_when(`Signals number` == 1 ~ "a)",
+                          `Signals number` == 5 ~ "b)",
+                          `Signals number` == 10 ~ "c)")) %>%
+  rename("Case" = `Signals number`) %>%
+  kbl(digits = 3) %>%
+  kable_styling(latex_options = "HOLD_position")
+```
+
+Although all procedures control the FDR at the level $\alpha$, once again results for the Benjamini-Hochberg method are the highest, while the others are similar. All obtained values are getting lower as the number of signals is getting bigger. In general, the Benjamini-Hochberg procedure controls the FDR, but only when the hypotheses ($p$-values) are mutually independent.
+
+## 3. Comparison of procedures in a large dimensional setup
+
+```{r}
+n <- 5000
+mu_2 <- list(c(1.2*sqrt(2*log(n)), rep(0, n-1)),
+             c(rep(1.02*sqrt(2*log(n/200)), 100), rep(0, n-100)),
+             c(rep(sqrt(2*log(n/200)), 100), rep(0, n-100)),
+             c(rep(1.002*sqrt(2*log(n/2000)), 1000), rep(0, n-1000)))
+
+rep <- 2000
+alpha <- 0.05
+signals_nums <- c(1,"100 (stronger)","100 (weaker)",1000)
+
+mult_samp_2 <- setNames(lapply(mu_2, function(mu_vec){
+  lapply(1:rep, function(rep){
+    sapply(mu_vec, function(mu_val) rnorm(1, mu_val))
+  })
+}), paste0("Signals_num=", signals_nums))
+
+mult_p_vals_2 <- lapply(mult_samp_2, function(samp_mu){
+  lapply(samp_mu, function(samp) 2*pnorm(-abs(samp)))
+})
+
+res_2 <- lapply(mult_p_vals_2, function(p_vals_mu){
+  lapply(p_vals_mu, function(p_vals){
+    setNames(list(p.adjust(p_vals, method = "bonferroni") < alpha,
+                  p_vals < (1 - (1 - alpha)^(1/n)),
+                  p.adjust(p_vals, method = "holm") < alpha,
+                  p.adjust(p_vals, method = "hochberg") < alpha,
+                  p.adjust(p_vals, method = "BH") < alpha),
+             methods_names)
+  })
+})
+
+pow_2 <- setNames(mapply(function(signals_num, res_mu){
+  lapply(res_mu, function(res_method){
+    lapply(res_method, function(res){
+      if(signals_num == 1) res[1]
+      else mean(res[1:signals_num])
+    })
+  })
+}, c(1, 100, 100, 1000), res_2, SIMPLIFY = FALSE),
+names(res_2))
+
+rej_info_2 <- setNames(mapply(function(signals_num, res_mu){
+  lapply(res_mu, function(res_method){
+    lapply(res_method, function(res){
+      list(V = sum(res[-(1:signals_num)]),
+           R = sum(res))
+    })
+  })
+}, c(1, 100, 100, 1000), res_2, SIMPLIFY = FALSE),
+names(res_2))
+
+rej_info_df_2 <- data.frame(
+  V = unlist(rej_info_2)[seq(1, length(unlist(rej_info_2)), by = 2)],
+  R = unlist(rej_info_2)[seq(2, length(unlist(rej_info_2)), by = 2)],
+  Method = methods_names,
+  `Signals number` = rep(signals_nums, each = 5*rep),
+  check.names = FALSE
+) %>%
+  group_by(Method, `Signals number`) %>%
+  summarise(FWER = mean(V >= 1),
+            FDR = mean(ifelse(R > 0, V/R, 0)))
+```
+Now, we are repeating the previous calculations, except that now we have 2000 repetitions with $n=5000$ and we consider cases
+
+a) $\mu_1=1.2\sqrt{2\log n}\approx4.953$, $\mu_2=...=\mu_n=0$,
+b) $\mu_1=...=\mu_{100}=1.02\sqrt{2\log\frac{n}{200}}\approx2.588$, $\mu_{101}=...=\mu_n=0$,
+c) $\mu_1=...=\mu_{100}=\sqrt{2\log\frac{n}{200}}\approx2.537$, $\mu_{101}=...=\mu_n=0$,
+d) $\mu_1=...=\mu_{1000}=1.002\sqrt{2\log\frac{n}{2000}}\approx1.356$, $\mu_{1001}=...=\mu_n=0$.
+
+First, we estimate the standard powers.
+
+```{r}
+data.frame(Power = unlist(pow_2),
+           Method = methods_names,
+           `Signals number` = rep(signals_nums, each = 5*rep),
+           check.names = FALSE) %>%
+  group_by(Method, `Signals number`) %>%
+  summarise(Power = mean(Power)) %>%
+  pivot_wider(names_from = Method, values_from = Power) %>%
+  mutate(`Signals number` = case_when(`Signals number` == "1" ~ "a)",
+                                      `Signals number` == "100 (stronger)" ~ "b)",
+                                      `Signals number` == "100 (weaker)" ~ "c)",
+                                      `Signals number` == "1000" ~ "d)")) %>%
+  rename("Case" = `Signals number`) %>%
+  kbl(digits = 3) %>%
+  kable_styling(latex_options = "HOLD_position")
+```
+
+For each procedure the weaker the signal, the lower the power. Once again, all results are very similar except of those for the Benjamini-Hochberg, which are a little higher. Overall, all powers except for those when there is one strong signal are low.
+
+Next table shows the estimated FWER values.
+
+```{r}
+rej_info_df_2 %>%
+  dplyr::select(!FDR) %>%
+  pivot_wider(names_from = Method, values_from = FWER) %>%
+  mutate(`Signals number` = case_when(`Signals number` == "1" ~ "a)",
+                                      `Signals number` == "100 (stronger)" ~ "b)",
+                                      `Signals number` == "100 (weaker)" ~ "c)",
+                                      `Signals number` == "1000" ~ "d)")) %>%
+  rename("Case" = `Signals number`) %>%
+  kbl(digits = 3) %>%
+  kable_styling(latex_options = "HOLD_position")
+```
+
+Once again, Benjamini-Hochberg procedure does not control FWER, which is an expected outcome. For all the other methods FWER is close to the 0.05, and in case b) its values are event slightly higher than $\alpha$.
+
+In table below the estimated FDR values are shown.
+
+```{r}
+rej_info_df_2 %>%
+  dplyr::select(!FWER) %>%
+  pivot_wider(names_from = Method, values_from = FDR) %>%
+  mutate(`Signals number` = case_when(`Signals number` == "1" ~ "a)",
+                                      `Signals number` == "100 (stronger)" ~ "b)",
+                                      `Signals number` == "100 (weaker)" ~ "c)",
+                                      `Signals number` == "1000" ~ "d)")) %>%
+  rename("Case" = `Signals number`) %>%
+  kbl(digits = 3) %>%
+  kable_styling(latex_options = "HOLD_position")
+```
+
+False discovery rates obtained for Benjamini-Hochberg procedure are very close to the 0.05. Values estimated for other methods are similar and lower.
+
+## 4. Two-step Fisher procedure
+
+```{r}
+rep3 <- 2000
+alpha3 <- 0.05
+
+bonf_2_step <- function(p_vals, alpha){
+  if(min(p_vals) <= alpha/length(p_vals)) p_vals <= alpha
+  else rep(FALSE, length(p_vals))
+}
+
+chi_2_step <- function(samp, alpha){
+  if(sum(samp^2) > qchisq(1-alpha, length(samp))) 2*pnorm(-abs(samp)) <= alpha
+  else rep(FALSE, length(samp))
+}
+
+n3 <- c(20, 5000)
+
+mu3 <- setNames(lapply(n3, function(n){
+  list(a = c(1.2*sqrt(2*log(n)), rep(0, n-1)),
+       b = c(rep(1.02*sqrt(2*log(n/10)), 5), rep(0, n-5)),
+       c = c(sqrt(2*log(20/(1:10))), rep(0, n-10)))
+}), paste0("n=", n3))
+
+mu3[[2]]$"d" <- c(rep(1.002*sqrt(2*log(n3[2]/2000)), 1000), rep(0, n3[2]-1000))
+
+samp3 <- lapply(1:rep3, function(x){
+  lapply(mu3, function(mu_n){
+    lapply(mu_n, function(mu_vec){
+      sapply(mu_vec, function(mu) rnorm(1, mu))
+      })
+    })
+})
+
+bonf_2_step_res <- lapply(samp3, function(samp_rep){
+  lapply(samp_rep, function(samp_n){
+    lapply(samp_n, function(obs) bonf_2_step(2*pnorm(-abs(obs)), alpha3))
+  })
+})
+
+chi_sq_2_step_res <- lapply(samp3, function(samp_rep){
+  lapply(samp_rep, function(samp_n){
+    lapply(samp_n, function(obs) chi_2_step(obs, alpha3))
+  })
+})
+
+res_3 <- lapply(samp3, function(samp_rep){
+  lapply(samp_rep, function(samp_n){
+    list(
+      "Bonferroni" =
+        lapply(samp_n, function(obs) bonf_2_step(2*pnorm(-abs(obs)), alpha3)),
+      "chi-square" = lapply(samp_n, function(obs) chi_2_step(obs, alpha3))
+      )
+  })
+})
+
+pow_3 <- lapply(res_3, function(rep){
+  mapply(function(n, signals_lst){
+    lapply(n, function(test){
+      mapply(function(results, signals_num){
+        mean(results[1:signals_num])
+      }, test, signals_lst)
+    })
+  }, rep, list(c(1, 5, 10), c(1,5,10,1000)), SIMPLIFY = FALSE)
+})
+
+rej_info_3 <- lapply(res_3, function(rep){
+  mapply(function(n, signals_lst){
+    lapply(n, function(test){
+      mapply(function(results, signals_num){
+        list(V = sum(results[-(1:signals_num)]),
+             R = sum(results))
+      }, test, signals_lst, SIMPLIFY = FALSE)
+    })
+  }, rep, list(c(1, 5, 10), c(1,5,10,1000)), SIMPLIFY = FALSE)
+})
+
+weak_results3 <- data.frame(
+  V = unlist(rej_info_3)[seq(1, length(unlist(rej_info_3)), 2)],
+  R = unlist(rej_info_3)[seq(2, length(unlist(rej_info_3)), 2)],
+  Signals_num = c(rep(c(1, 5, 10), 2), rep(c(1, 5, 10, 1000), 2)),
+  Test = c(rep(c("Bonferroni", "chi-square"), each = 3),
+           rep(c("Bonferroni", "chi-square"), each = 4)),
+  n = rep(n3, c(6, 8))
+) %>%
+  group_by(Signals_num, Test, n) %>%
+  summarise(FWER = mean(V >= 1),
+            FDR = mean(ifelse(R > 0, V/R, 0)))
+
+strong_results_rej_info <- lapply(samp3, function(samp_rep){
+  mapply(function(samp_n, signals_lst){
+    mapply(function(obs, signals_num){
+      results <- 2*pnorm(-abs(obs)) <= alpha3
+      sum(results[-(1:signals_num)])
+    }, samp_n, signals_lst)
+  }, samp_rep, list(c(1, 5, 10), c(1, 5, 10,1000)), SIMPLIFY = FALSE)
+})
+
+strong_results3 <- data.frame(
+  V = unlist(strong_results_rej_info),
+  Signals_num = c(rep(c(1, 5, 10), 2), 1000),
+  Test = "none",
+  n = rep(n3, c(3,4))
+) %>%
+  group_by(Signals_num, n, Test) %>%
+  summarise(FWER = mean(V >= 1))
+
+results3 <- rbind(weak_results3, strong_results3)
+
+res_3_size <- lapply(res_3, function(rep){
+  lapply(rep, function(n){
+    lapply(n, function(test) test[[3]][1:10])
+  })
+})
+```
+We apply the two-step Fisher procedure using Bonferroni method and chi-square tests to the 2000 repetitions of samples $X=(X_1,...,X_n)$ with $n\in\{20,5000\}$ observations from the $N(\mu_i,1)$ distribution, where $i=1,...,n$ and
+
+a) $\mu_1=1.2\sqrt{2\log n}$, $\mu_2=...=\mu_n=0$,
+b) $\mu_1=...=\mu_5=1.02\sqrt{2\log \frac{n}{10}}$, $\mu_6=...=\mu_n=0$,
+c) $\mu_i=\sqrt{2\log \frac{20}{i}}$, $i=1,...,10$, $\mu_11=...=\mu_n=0$,
+d) $\mu_1=...=\mu_1000=1.002\sqrt{2\log \frac{n}{2000}}$, $\mu_{1001}=...=\mu_n=0$ for $n=5000$.
+
+To use the two-step Fisher procedure, first we implement a global test (Bonferroni or chi-square) and then, if global $H_0$ is rejected, we reject those $H_{0i}$ for which $p_i\leq\alpha$.
+
+The global testing problem hypotheses are
+
+$$H_0:\forall i\;\mu_i=0,\;\;H_1:\exists i\;\mu_i\ne0.$$
+
+To use the Bonferroni test we once again calculate $p$-values (using the same method as before) and then we reject the global null if
+
+$$\min_i p_i\leq\frac{\alpha}{n}.$$
+
+The chi-square test rejects the global null when
+
+$$\sum_{i=1}^nX_i^2>\chi^2_n(1-\alpha),$$
+
+where $\chi^2_n(1-\alpha)$ is the quantile of level $1-\alpha$ of chi-square distribution with $n$ degrees of freedom.
+
+Let significance levels of all tests equal $\alpha=0.05$. Below, the standard powers estimated in each scenario can be seen.
+
+```{r}
+data.frame(
+  Power = c(unlist(pow_3)),
+  Signals_num = c(rep(c(1, 5, 10), 2), rep(c(1, 5, 10, 1000), 2)),
+  Test = c(rep(c("Bonferroni", "chi-square"), each = 3),
+           rep(c("Bonferroni", "chi-square"), each = 4)),
+  n = rep(n3, c(6, 8))
+) %>%
+  group_by(Signals_num, Test, n) %>%
+  summarise(Power = mean(Power)) %>%
+  pivot_wider(names_from = c(Test, n), values_from = Power) %>%
+  mutate(Signals_num = case_when(Signals_num == 1 ~ "a)",
+                                 Signals_num == 5 ~ "b)",
+                                 Signals_num == 10 ~ "c)",
+                                 Signals_num == 1000 ~ "d)")) %>%
+  rename("Case" = Signals_num) %>%
+  kbl(digits = 3, col.names = c("Case", "n=20", "n=5000", "n=20", "n=5000")) %>%
+  kable_styling(latex_options = "HOLD_position") %>%
+  add_header_above(c(" ", "Bonferroni" = 2, "chi-square" = 2))
+```
+
+Two-step procedure with the Bonferroni test results with higher power than the second one when there is only one strong signal ($\mu_1\approx2.937$ for $n=20$ and $\mu_1\approx4.953$ for $n=5000$). This outcome is expected, as the Bonferroni test is well-suited for such situations. Because this single signal is stronger for the larger sample size, the power of this test is also higher in that case. On the other hand, the power of procedure with the chi-square test is lower for the larger $n$, as the effect of the increased sample size outweighs the effect of the stronger signal, leading to less frequent rejection of the global null hypothesis.
+
+In case b) ($\mu_1=...=\mu_5\approx1.201$ for $n=20$ and $\mu_1=...=\mu_5\approx3.596$ for $n=5000$), the power for the Bonferroni test is lower when the signal is weaker but increases significantly with a stronger signal, as expected. The power for the chi-square test also increases with a stronger signal but overall remains low.
+
+When there are 10 signals both procedures have much lower powers for $n=5000$, which is an expected outcome, as in this scenario the non-zero means do not depend on the sample size.
+
+In case d), considered only for $n=5000$, the signals are equal to 1.356. Consequently, the powers estimated for both procedures remain quite low, with slightly higher values for the procedure using the chi-square test.
+
+The plot below shows the estimated powers for different means in case c).
+
+```{r}
+data.frame(Results = unlist(res_3_size),
+           mu = mu3[[1]][[3]][1:10],
+           Test = rep(c("Bonferroni", "chi-square"), each = 10),
+           n = rep(n3, each = 20)) %>%
+  group_by(mu, Test, n) %>%
+  summarise(Power = mean(Results)) %>%
+  ggplot(aes(x = mu, y = Power, color = Test, group = Test)) +
+  geom_point() +
+  geom_line() +
+  labs(x = TeX("$\\mu$")) +
+  facet_wrap(~ n) +
+  theme_light() +
+  scale_colour_paletteer_d("fishualize::Balistapus_undulatus")
+```
+
+The values of the estimated powers increase with $\mu_i$ but are significantly smaller when $n=5000$, which is a logical outcome.
+
+The two-step Fisher procedure controls FWER weakly, as the global null hypothesis must be first rejected to obtain any discoveries. When we remove the first step, we are able to calculate the FWER in a strong sense. All estimated FWER values are shown in the table below.
+
+```{r}
+results3 %>%
+  dplyr::select(!FDR) %>%
+  pivot_wider(names_from = c(Test, n), values_from = FWER) %>%
+  mutate(Signals_num = case_when(Signals_num == 1 ~ "a)",
+                                 Signals_num == 5 ~ "b)",
+                                 Signals_num == 10 ~ "c)",
+                                 Signals_num == 1000 ~ "d)")) %>%
+  rename("Case" = Signals_num) %>%
+  kbl(digits = 3, col.names = c("Case", "n=20", "n=5000", "n=20", "n=5000",
+                                "n=20", "n=5000")) %>%
+  kable_styling(latex_options = "HOLD_position") %>%
+  add_header_above(c(" ", "Bonferroni" = 2, "chi-square" = 2, "none" = 2))
+```
+
+When $n=20$, the FWER of the procedure with Bonferroni test is slightly higher than that of the procedure with chi-square test only in case a), which is a logical outcome, as the Bonferroni method rejects the global null more often when there is a single strong signal. For the same reason, the FWER of this method is larger in cases a) and b) when $n=5000$.
+
+In the scenario where $n=5000$ and there are 10 signals, the Family-wise error rates of both procedures are low compared to the other results, reflecting the small powers of the global tests in this case. On the other hand, in case d), both estimated FWER values are high. Combined with the powers of both procedures being below 0.3 in this case, this suggests that the procedures do not perform well in this situation.
+
+The FWER calculated in a strong sense is the highest in each scenario, which is an expected outcome since there is no restriction on making discoveries based on the rejection of the global null. Overall, none of these methods controls the FWER at the level $\alpha$.
+
+```{r}
+results3 %>%
+  dplyr::select(!FWER) %>%
+  filter(Test != "none") %>%
+  pivot_wider(names_from = c(Test, n), values_from = FDR) %>%
+  mutate(Signals_num = case_when(Signals_num == 1 ~ "a)",
+                                 Signals_num == 5 ~ "b)",
+                                 Signals_num == 10 ~ "c)",
+                                 Signals_num == 1000 ~ "d)")) %>%
+  rename("Case" = Signals_num) %>%
+  kbl(digits = 3, col.names = c("Case", "n=20", "n=5000", "n=20", "n=5000")) %>%
+  kable_styling(latex_options = "HOLD_position") %>%
+  add_header_above(c(" ", "Bonferroni" = 2, "chi-square" = 2))
+```
+
+Dependencies between the obtained false discovery rates are quite similar to those of family-wise error rates. When $n=5000$, the mean proportions of false discoveries for the procedure using the Bonferrroni test in cases a) and b) are relatively high. In contrast, the FDR values for the procedure using the chi-square test remain quite low in these scenarios, reflecting its low power when there are few signals. Both procedures have relatively high FDR when there are 1000 signals.
+
+## 5. Brownian bridge and Kolmogorov-Smirnov statistic
+
+```{r}
+n4 <- 5000
+rep4 <- 1000
+alpha4 <- c(0.8, 0.9, 0.95)
+
+t <- seq(0, 1, length.out = 1000)
+
+emp_proc_traj <- lapply(1:rep4, function(rep){
+  samp <- runif(n4)
+  F_n <- ecdf(samp)
+  sqrt(n4)*(F_n(t) - t)
+})
+
+bbridge_traj <- lapply(1:rep4, function(rep){
+  BBridge(N = 999)
+})
+
+traj_df <- data.frame(
+  t = t,
+  y = c(unlist(emp_proc_traj[1:5]), unlist(bbridge_traj[1:5])),
+  Trajectory = rep(1:5, each = 1000),
+  Process = rep(c("U", "Brownian bridge"), each = 5000)
+) %>%
+  rowwise() %>%
+  mutate(group = paste0(Trajectory, Process, collapse = ", "))
+
+KS_stat <- sapply(emp_proc_traj, function(traj) max(abs(traj/sqrt(n4))))
+
+T_stat <- sapply(bbridge_traj, function(traj) max(abs(traj)))
+```
+For $n=5000$, we simulate 1000 trajectories of the empirical process
+
+$$U_n(t)=\sqrt{n}(F_n(t)-t),\;\;t\in[0,1],$$
+
+where $F_n(t)$ is the empirical cumulative distribution function of the uniform distribution. Additionally, we simulate 1000 trajectories of the Brownian bridge for $t\in[0,1]$. Below, first five trajectories of both processes can be seen.
+
+```{r}
+ggplot(traj_df, aes(x = t, y = y, color = as.factor(Trajectory),
+                    group = group)) +
+  geom_line(show.legend = FALSE) +
+  facet_wrap(~ Process) +
+  theme_light() +
+  scale_colour_paletteer_d("fishualize::Balistapus_undulatus")
+```
+
+It can be observed that the trajectories of both processes look similar.
+
+The Kolmogorov-Smirnov statistic is given by
+
+$$\text{KS}_n=\sup_{t\in[0,1]}|\hat F_n(t)-t|,$$
+
+where $\hat F_n$ is the empirical cdf for the p-values $p_1,...,p_n$. Based on the simulated trajectories of $U_n$, we estimate the $\alpha$ quantile of the KS statistic under the null hypothesis (i.e., $\hat F_n$ is the cdf of uniform distribution on $[0,1]$), where $\alpha\in\{0.8,0.9,0.95\}$. We also estimate the $\alpha$ quantile of
+
+$$T=\sup_{t\in[0,1]}|B(t)|.$$
+
+The esimated quantiles are shown in a below table.
+
+```{r}
+data.frame(Statistic = c("KS", "T"),
+           "80%" = c(quantile(KS_stat, probs = alpha4)[1],
+                     quantile(T_stat, probs = alpha4)[1]),
+           "90%" = c(quantile(KS_stat, probs = alpha4)[2],
+                     quantile(T_stat, probs = alpha4)[2]),
+           "95%" = c(quantile(KS_stat, probs = alpha4)[3],
+                     quantile(T_stat, probs = alpha4)[3]),
+           check.names = FALSE) %>%
+  kbl(digits = 3) %>%
+  kable_styling(latex_options = "HOLD_position")
+```
+
+Now, if we multiply the quantiles for Kolmogorov-Smirnov statistic, we get values `r round(quantile(KS_stat, probs = alpha4)*sqrt(n4), 3)`, which are very close to the quantiles of $T$ statistic distribution. Indeed, under $H_0$,
+
+$$\sqrt{n}\text{KS}_n\rightarrow^{D}\sup_{t\in[0,1]}|B(t)|.$$
+
+Because the theoretical distribution of KS statistic is not known, we can calculate the critical value using this asymptotic distribution of KS.
+
+## 6. Summary
+
+In this report we focused mainly on the multiple testing methods, comparing their powers, false discovery rates and family-wise error rates under various conditions. Obtained results indicate the Benjamini-Hochberg procedure is more powerful than the other ones, but contrary to them it does not control the FWER. Benjamini-Hochberg controls only FDR if the hypotheses are mutually independent. Moreover, estimations based on the simulations showed, that two-step Fisher procedure does not control FWER in a weak or strong sense. Depending on which test we use for the first step, the results can differ significantly. Finally, based on the simulations we confirmed, that the critical value for Kolmogorov-Smirnov test statistic can be approximated using the Brownian bridge.
